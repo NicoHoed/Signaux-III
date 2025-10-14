@@ -97,6 +97,7 @@ Layout détecté : AZERTY (FR)
 * Afficher les touches détectées (rectangles + index ligne/colonne).
 * Évaluer la précision du système sur le dataset.
 
+```mermaid
 flowchart TD
     A[Image du clavier (photo RGB/JPG)] --> B[Prétraitement d'image]
     B --> C[Détection des touches]
@@ -109,3 +110,4 @@ flowchart TD
     D -->|Rectangles rouges sur touches, comptage touches par ligne| D
     E -->|Regroupement par ligne (Y), tri par colonne (X), matrice image_based| E
     F -->|Comparaison avec modèles AZERTY/QWERTY| F
+```
