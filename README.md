@@ -8,27 +8,22 @@ Développer un système capable d’identifier le type de clavier utilisé (AZER
 
 Traitement d’une image d’un clavier physique ; détection automatique de la disposition des touches ; identification du layout (au minimum : QWERTY ou AZERTY) avec affichage du résultat à l’utilisateur.
 
----
-
 ## Plan de projet : Détection du layout de clavier physique
 
 ### **1. Phase de préparation des données**
 
 **Objectif :** constituer un jeu d’images variées de claviers.
 
-- **Collecte d’échantillons :**
+* **Collecte d’échantillons :**
 
-    - Différents layouts : `AZERTY FR`, `AZERTY BE`, `QWERTY US`, `QWERTY UK`, etc.
-    - Conditions variables : angles, luminosité, distance, contraste.
-    - Sauvegarder au format `.png` ou `.jpg`, résolution moyenne (1000–2000 px de large).
+  * Différents layouts : `AZERTY FR`, `AZERTY BE`, `QWERTY US`, `QWERTY UK`, etc.
+  * Conditions variables : angles, luminosité, distance, contraste.
+  * Sauvegarder au format `.png` ou `.jpg`, résolution moyenne (1000–2000 px de large).
 
-- **Annotation manuelle :**
+* **Annotation manuelle :**
 
-    - Créer un tableau `dataset.csv` avec deux colonnes : `filename`, `layout`.
-    - Optionnel : marquer manuellement les coordonnées approximatives d’une ligne de touches (pour valider les algorithmes).
-
-
----
+  * Créer un tableau `dataset.csv` avec deux colonnes : `filename`, `layout`.
+  * Optionnel : marquer manuellement les coordonnées approximatives d’une ligne de touches (pour valider les algorithmes).
 
 ### **2. Prétraitement d’image**
 
@@ -42,76 +37,75 @@ Traitement d’une image d’un clavier physique ; détection automatique de la 
 4. **Seuillage automatique** (Otsu ou manuel) → `img_bin`.
 5. **Morphologie** :
 
-    - `ouverture` pour enlever les petits points.
-    - `fermeture` pour combler les trous dans les touches.
+   * `ouverture` pour enlever les petits points.
+   * `fermeture` pour combler les trous dans les touches.
 
->À ce stade : on obtient une image “noir et blanc” où chaque touche est une forme blanche isolée.
+> À ce stade : on obtient une image “noir et blanc” où chaque touche est un rectangle noir isolé et les caractères à l’intérieur apparaissent en blanc.
 
----
+### **3. Détection des touches entières**
 
-### **3. Détection des touches individuelles**
+**Objectif :** repérer uniquement les rectangles noirs correspondant aux touches du clavier.
 
-**Objectif :** repérer les touches et extraire leur géométrie.
+* **Inversion de l’image** : les touches noires deviennent les objets à détecter.
+* **Labelisation des composants connexes** pour extraire les régions.
+* **Filtrage par aire** :
 
-- **Contours** : appliquer un algorithme de recherche de composantes connexes ou de contours (implémenté à la main si besoin).
-- **Filtrage des régions** :
-    - Supprimer les très petites ou très grandes (bruit, bords du clavier).
-    - Garder les rectangles approximatifs.
-- **Approximation rectangulaire** : calculer le rectangle englobant chaque touche.
-- **Visualisation** : afficher les bounding boxes pour vérification.
+  * éliminer les petites régions (bruits, lettres)
+  * éliminer les très grandes régions (trackpad ou artefacts).
+* **Filtrage par ratio largeur/hauteur** : détecter les touches régulières et accepter séparément les touches larges atypiques (spacebar, Enter, Maj droite).
+* **Filtrage par position verticale** : éliminer les composants en dehors de la zone du clavier.
+* **Résultat** : une liste de rectangles englobants représentant les touches entières.
 
----
+> À ce stade : tous les objets détectés correspondent à de vraies touches du clavier. Les lettres à l’intérieur ne sont pas encore analysées.
 
-### **4. Reconstruction de la grille**
+### **4. Visualisation**
 
-**Objectif :** organiser les touches en lignes et colonnes.
+**Objectif :** vérifier la détection.
 
-- Trier les touches selon leur coordonnée `y` pour regrouper par ligne.
-- Calculer la moyenne de `y` dans chaque groupe → lignes du clavier.
-- Trier ensuite dans chaque ligne par coordonnée `x`.
-- Représenter la structure comme une matrice de symboles (touches).
+* Afficher l’image binaire avec des rectangles rouges superposés sur chaque touche détectée.
+* Compter le nombre de touches détectées pour chaque ligne.
 
----
+### **5. Reconstruction de la grille** (étape suivante)
 
-### **5. Détection du layout**
+**Objectif :** organiser les touches détectées en lignes et colonnes.
+
+* Trier les touches par coordonnée verticale (`y`) pour regrouper par ligne.
+* Calculer la moyenne de `y` dans chaque groupe pour définir la ligne du clavier.
+* Trier ensuite les touches de chaque ligne par coordonnée horizontale (`x`).
+* Représenter la structure sous forme de matrice (initialement remplie de `None` ou symboles à remplir après reconnaissance des caractères).
+
+> Cette étape permet de déterminer **le nombre de touches par ligne** et la disposition générale du clavier.
+
+### **6. Détection du layout (après reconnaissance des caractères)**
 
 **Objectif :** comparer la structure à des patterns connus.
 
-#### Méthode simple :
+* Identifier les premières touches de la ligne de lettres pour différencier AZERTY/QWERTY.
+* Méthodes possibles :
 
-- Identifier les **3 premières touches** de la ligne supérieure de lettres :
+  * Template matching sur les caractères.
+  * Corrélation simple avec des modèles prédéfinis (`A`, `Q`, `Z`, `W`).
 
-    - Si c’est `A-Z-E` → **AZERTY**
-    - Si c’est `Q-W-E` → **QWERTY**
+### **7. Validation et affichage du résultat**
 
-- Pour cela, tu peux :
-
-    - Croper les images des premières touches détectées.
-    - Appliquer une **corrélation** ou **template matching** avec des modèles de lettres (`A`, `Q`, `Z`, `W`) pré-enregistrés (créés à la main ou extraits d’autres images).
-    - Mesurer la corrélation maximale → identifier la lettre dominante.
-
->Même si la reconnaissance n’est pas parfaite, une corrélation simple entre images de caractères peut suffire pour différencier AZERTY/QWERTY.
-
----
-
-### **6. Validation et affichage du résultat**
-
-**Objectif :** montrer à l’utilisateur la détection.
-
-- Superposer le label détecté sur l’image :
+* Superposer le label détecté sur l’image :
 
 ```
 Layout détecté : AZERTY (FR)
 ```
 
-- Afficher les touches détectées (rectangle + index de ligne/colonne).
-- Évaluer la précision du système sur le petit dataset.
+* Afficher les touches détectées (rectangles + index ligne/colonne).
+* Évaluer la précision du système sur le dataset.
 
----
+flowchart TD
+    A[Image du clavier (photo RGB/JPG)] --> B[Prétraitement d'image]
+    B --> C[Détection des touches]
+    C --> D[Visualisation / Vérification]
+    D --> E[Reconstruction de la grille]
+    E --> F[Détection du layout]
 
-### **7. Améliorations possibles**
-
-- Reconnaissance plus fine (France vs Belgique) : comparer les symboles `²`, `é`, etc.
-- Compensation d’inclinaison (correction de perspective avec transformation affine).
-- Gestion d’éclairage inégal (filtrage adaptatif, seuillage local).
-- Interface utilisateur simple avec `matplotlib` ou `tkinter`.
+    B -->|Étapes: gris, filtre médian, égalisation, seuillage, morphologie| B
+    C -->|Inversion image, composants connectés, filtrage aire/ratio/position| C
+    D -->|Rectangles rouges sur touches, comptage touches par ligne| D
+    E -->|Regroupement par ligne (Y), tri par colonne (X), matrice image_based| E
+    F -->|Comparaison avec modèles AZERTY/QWERTY| F
