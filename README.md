@@ -55,7 +55,6 @@ Traitement d’une image d’un clavier physique ; détection automatique de la 
 
 - **Contours** : appliquer un algorithme de recherche de composantes connexes ou de contours (implémenté à la main si besoin).
 - **Filtrage des régions** :
-
     - Supprimer les très petites ou très grandes (bruit, bords du clavier).
     - Garder les rectangles approximatifs.
 - **Approximation rectangulaire** : calculer le rectangle englobant chaque touche.

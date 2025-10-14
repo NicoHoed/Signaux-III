@@ -1,84 +1,49 @@
-import matplotlib.pyplot as plt
-from skimage import measure, color
 import numpy as np
+import matplotlib.pyplot as plt
+from skimage import measure, draw
+from src.preprocessing import pretraiter_image
+from skimage import io
 
 
-def detecter_touches(img_binaire, aire_min=100, aire_max=5000, afficher=False):
+def detect_keys(img, taille_filtre=3, seuil=None, min_area=100, max_area=5000):
     """
-    Détecte les touches individuelles d’un clavier à partir d’une image binaire.
-
-    Paramètres :
-    ----------
-    img_binaire : ndarray (booléen)
-        Image binaire issue du prétraitement.
-    aire_min : int, optionnel
-        Aire minimale d’une touche (en pixels) pour éliminer le bruit.
-    aire_max : int, optionnel
-        Aire maximale d’une touche (en pixels) pour ignorer les grands objets.
-    afficher : bool, optionnel
-        Si True, affiche les rectangles englobants sur l’image.
-
-    Retour :
-    -------
-    touches : list[dict]
-        Liste de dictionnaires, chaque entrée contenant :
-        {
-            "bbox": (minr, minc, maxr, maxc),
-            "aire": float,
-            "ratio": float  # rapport largeur/hauteur (utile pour filtrer les touches)
-        }
+    Détecte les touches d'un clavier à partir d'une image.
     """
 
-    # Vérifier que l'image est bien 2D
-    if img_binaire.ndim != 2:
-        raise ValueError("L'image binaire doit être en 2D (une seule couche).")
+    # Étape 1 : Prétraitement
+    binary_image = pretraiter_image(img, taille_filtre=taille_filtre, seuil=seuil)
 
-    # Étiqueter les composantes connexes
-    etiquettes = measure.label(img_binaire)
-    regions = measure.regionprops(etiquettes)
+    # Étape 2 : Détection des composants connectés
+    labels = measure.label(binary_image)
+    regions = measure.regionprops(labels)
 
-    touches = []
+    key_boxes = []
+
     for region in regions:
-        if aire_min < region.area < aire_max:
+        # Filtrage par aire
+        if min_area <= region.area <= max_area:
             minr, minc, maxr, maxc = region.bbox
-            hauteur = maxr - minr
-            largeur = maxc - minc
-            ratio = largeur / hauteur if hauteur > 0 else 0
+            key_boxes.append((minr, minc, maxr, maxc))
 
-            # Filtrer un peu par forme (facultatif)
-            if 0.5 < ratio < 3.5:  # touches approximativement rectangulaires
-                touches.append(
-                    {
-                        "bbox": (minr, minc, maxr, maxc),
-                        "aire": region.area,
-                        "ratio": ratio,
-                    }
-                )
+    return key_boxes, binary_image
 
-    # --- Affichage optionnel ---
-    if afficher:
-        img_affiche = img_binaire.astype(np.float32)
 
-        # Conversion en RGB seulement si l'image est 2D
-        img_rgb = color.gray2rgb(img_affiche)
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.imshow(img_rgb, cmap="gray")
-
-        for t in touches:
-            minr, minc, maxr, maxc = t["bbox"]
-            rect = plt.Rectangle(
-                (minc, minr),
-                maxc - minc,
-                maxr - minr,
-                edgecolor="red",
-                facecolor="none",
-                linewidth=1.5,
-            )
-            ax.add_patch(rect)
-
-        ax.set_title(f"{len(touches)} touches détectées")
-        ax.axis("off")
-        plt.show()
-
-    return touches
+def plot_keys(img, key_boxes):
+    """
+    Affiche l'image avec les rectangles des touches détectées.
+    """
+    fig, ax = plt.subplots()
+    ax.imshow(img, cmap="gray")
+    for bbox in key_boxes:
+        minr, minc, maxr, maxc = bbox
+        rect = plt.Rectangle(
+            (minc, minr),
+            maxc - minc,
+            maxr - minr,
+            edgecolor="red",
+            facecolor="none",
+            linewidth=1.5,
+        )
+        ax.add_patch(rect)
+    ax.set_axis_off()
+    plt.show()
