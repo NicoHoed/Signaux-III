@@ -1,106 +1,91 @@
-# Détection de Layout de Clavier V2 : Approche par Analyse de Forme
+# Signaux III - Projet de Détection Automatisée de Layout de Clavier
 
-## 1. La Théorie : Les 3 Filtres en Cascade
+## 1. Description du Projet
 
-Au lieu de tenter de "lire" les lettres (OCR), nous allons déduire le layout en analysant les **propriétés géométriques et topologiques** (forme, trous, remplissage) de touches clés situées dans des zones spécifiques.
+Ce projet, réalisé dans le cadre du cours de **Signaux III : Traitement Numérique** à l'EPHEC, a pour objectif de développer une application Python capable d'analyser une image de clavier d'ordinateur et d'en déterminer automatiquement les caractéristiques de layout et de format. L'implémentation repose entièrement sur l'application de techniques de **Traitement d'Images Numériques**, en s'appuyant sur les concepts de segmentation, de détection de contours et de classification morphologique.
 
-### Filtre 1 : La Géométrie Physique (ISO vs ANSI)
-Ce filtre repose sur les dimensions des touches (bounding box), accessibles via `measure.regionprops`.
+Les trois caractéristiques principales identifiées sont :
 
-* **Zone à observer :** Le bord gauche (Touche MAJ) et le bord droit (Touche Entrée).
-* **Le test (Analyse de l'aspect ratio) :**
-    * **ISO (Europe - AZERTY/UK) :**
-        * Touche MAJ Gauche : **Courte**. Ratio Largeur/Hauteur $\approx$ 1.2 à 1.5.
-        * Touche Entrée : Forme complexe (souvent détectée comme haute et étroite si segmentée verticalement).
-    * **ANSI (USA - QWERTY US) :**
-        * Touche MAJ Gauche : **Longue**. Ratio Largeur/Hauteur $> 2.0$.
-        * Touche Entrée : Rectangulaire horizontale.
-    * **Conclusion :** Un `bbox` court pour le Shift gauche indique fortement un layout européen (ISO).
+1.  **Format Physique (ISO/ANSI) :** Déterminé par l'analyse du **ratio largeur/hauteur** de la touche `Shift` gauche.
+2.  **Système d'Exploitation (Mac/Windows) :** Classifié en analysant la topologie du logo sur la touche `OS/Command` via le calcul du **Nombre d'Euler** (ou Caractéristique d'Euler).
+3.  **Layout Linguistique (AZERTY/QWERTY) :** Inférencé par des heuristiques basées sur la géométrie et l'extension des touches dans le coin supérieur gauche du clavier (`TL_LETTER`).
 
-### Filtre 2 : La Signature Morphologique (AZERTY vs QWERTY)
-On différencie les layouts par la forme globale de la première lettre en haut à gauche ("A" vs "Q").
+### Pipeline de Traitement
 
-| Propriété | **"A" (AZERTY)** | **"Q" (QWERTY)** |
-| :--- | :--- | :--- |
-| **Forme globale** | Triangulaire / Pyramidal | Circulaire / Carré |
-| **Taux de remplissage (Extent)** | **Faible** (environ 0.5 - 0.6). La lettre ne remplit pas les coins supérieurs de sa boîte. | **Élevé** (environ 0.7 - 0.9). La lettre remplit presque toute sa boîte. |
-| **Centre de masse (Centroid)** | Décalé vers le **bas** (base du triangle). | Proche du **centre** géométrique. |
-| **Trous (Euler)** | 1 Trou (le triangle du haut). | 1 Trou (le cercle). *Critère peu discriminant ici.* |
+Le pipeline de l'application suit une approche structurée de traitement d'image :
 
-* **Stratégie :** On extrait le "blob" en haut à gauche. Si son taux de remplissage (`area / bbox_area`) est faible et son centre de gravité bas, c'est probablement un **A**. Si c'est un bloc massif bien rempli, c'est un **Q**.
+1.  **Prétraitement (`preprocessing.py`) :** Application d'un filtre médian pour la réduction du bruit, d'une égalisation d'histogramme pour l'amélioration du contraste, et d'une binarisation par seuillage d'Otsu. Des opérations de morphologie (ouverture et fermeture binaires) sont utilisées pour nettoyer le masque des touches.
+2.  **Détection (`analysis.py`) :** Utilisation des propriétés de région (aire, ratio de forme) pour identifier les objets candidats (touches). Un filtrage spatial permet d'éliminer les éléments non pertinents (trackpad).
+3.  **Zoning (`analysis.py`) :** Identification des régions d'intérêt (ROI) critiques (Espace, Shift Gauche, Touche OS, Touche Lettre Haut-Gauche) basées sur la topologie du clavier.
+4.  **Classification (`analysis.py`) :** Application des algorithmes de classification et d'heuristiques pour déterminer le verdict final.
 
-### Filtre 3 : L'OS (Mac vs Windows) via Topologie
-On utilise la topologie (nombre de trous et de composantes connexes) pour identifier les touches spéciales du bas (Cmd vs Win).
+## 2. Installation et Configuration
 
-* **Zone à observer :** La rangée du bas, à gauche ou droite de la barre espace.
-* **Mac (Touche Command ⌘) :**
-    * Forme unique avec **plusieurs boucles** (trous).
-    * En utilisant `label` sur l'inverse de la touche ou via le nombre d'Euler, on détecte une complexité topologique élevée.
-* **Windows (Logo Fenêtre) :**
-    * Souvent composé de **4 petits carrés** distincts.
-    * Une fois binarisé et labellisé *localement*, on trouve **4 composantes connexes** proches, ou une forme géométrique très stricte.
+### 2.1. Prérequis
 
----
+Ce projet est développé en Python 3. Les librairies nécessaires sont listées dans `requirements.txt`.
 
-## 2. Le Pipeline de Traitement d'Image (Compatible Cours)
+### 2.2. Cloner le dépôt
 
-Ce pipeline n'utilise que des opérations matricielles, morphologiques et de mesure.
+```bash
+git clone https://github.com/NicoHoed/Signaux-III
+````
 
-1.  **Prétraitement & Segmentation Globale :**
-    * Conversion Gris -> Filtre Médian (Bruit) -> Égalisation (Contraste).
-    * Binarisation (Otsu ou Adaptatif) pour obtenir les "Blobs".
-    * Nettoyage (`opening`/`closing`) pour détacher les touches.
-    * `measure.label` pour lister toutes les touches potentielles.
+### 2.3. Installation des dépendances
 
-2.  **Filtrage Spatial (Zoning) :**
-    * Identification des coins du clavier basés sur les coordonnées des régions (`min_row`, `min_col`).
-    * Extraction des **ROI (Regions of Interest)** :
-        * *ROI_1 :* La touche la plus en haut à gauche (Candidat A/Q).
-        * *ROI_2 :* La touche la plus à gauche de la rangée avant-dernière (Candidat Shift).
-        * *ROI_3 :* Touches adjacentes à la barre espace (Candidat OS).
+Il est fortement recommandé de travailler dans un environnement virtuel.
 
-3.  **Extraction de Caractéristiques (Feature Extraction) :**
-    Pour chaque ROI, on calcule via `skimage.measure.regionprops` :
-    * `bbox` (Hauteur/Largeur) $\rightarrow$ Pour le filtre ISO/ANSI.
-    * `extent` (Aire / Aire BoundingBox) $\rightarrow$ Pour A vs Q.
-    * `local_centroid` $\rightarrow$ Pour A vs Q (Centre de gravité).
-    * `euler_number` ou analyse des trous (`binary_fill_holes` XOR image originale) $\rightarrow$ Pour Mac (Cmd).
+```bash
+# Création et activation de l'environnement
+python -m venv venv
+source venv/bin/activate 
 
-4.  **Arbre de Décision (Classification) :**
-    * `SI` Shift_Ratio < 1.5 `ALORS` ISO `SINON` ANSI.
-    * `SI` HautGauche_Extent < 0.65 `ALORS` "A" (AZERTY) `SINON` "Q" (QWERTY).
-    * `SI` Bas_Complexité > Seuil `ALORS` Mac `SINON` Win.
-
----
-
-## 3. La "Subtilité Belge" (Bonus V2.5)
-* **Théorie :** AZERTY Belge a souvent des symboles différents sur la ligne des chiffres par rapport à la France.
-* **Approche Forme :** Très difficile sans OCR. On pourrait tenter de compter le nombre de petits "îlots" (composantes connexes) sur la touche `2` (pour voir si ça ressemble à un `@` complexe ou un `é` simple), mais c'est risqué. À garder pour la fin.
-
----
-
-## Proposition de plan d'action (Mis à jour)
-
-1.  **Script d'Analyse (Explorer) :** Créer un script simple qui prend une image, clique sur une touche, et affiche ses métriques (`Extent`, `Solidity`, `Euler`, `Ratio`). Cela nous servira à "calibrer" nos seuils (ex: est-ce qu'un A fait 0.5 ou 0.6 de remplissage ?).
-2.  **Développement du Pipeline :** Implémenter la détection des zones (Haut-Gauche, Bas-Gauche) automatiquement.
-3.  **Intégration :** Combiner les deux pour sortir le verdict final.
-
----
-
+# Installation des dépendances
+pip install -r requirements.txt
 ```
-keyboard_detector_v2/
-│
-├── data/
-│   ├── inputs/          # images ici (BE-azerty-1.jpg, etc.)
-│   └── outputs/         # vide pour l'instant
-│
-├── src/
-│   ├── __init__.py      # Fichier vide (pour que Python reconnaisse le dossier comme package)
-│   ├── preprocessing.py # vide pour l'instant
-│   └── analysis.py      # vide pour l'instant
-│
-├── explore_shape.py     # LE SCRIPT : Pour cliquer sur les touches et voir les stats
-├── main.py              # Le script final
-├── .gitignore
-└── requirements.txt     # numpy, scikit-image, matplotlib...
-```
+
+Le projet repose sur les packages de calcul matriciel (`numpy`), de traitement d'images (`scikit-image`) et de visualisation (`matplotlib`).
+
+### 2.4. Structure des données
+
+Les images à analyser doivent être placées dans le répertoire `data/inputs/`.
+
+## 3. Utilisation
+
+Le projet propose deux modes d'exécution.
+
+### 3.1. Analyse d'une image unique (`main.py`)
+
+Ce mode permet d'analyser un fichier spécifique et d'afficher les résultats du diagnostic ainsi qu'une visualisation graphique détaillant la détection des zones clés.
+
+1.  **Configuration :** Modifiez la variable `IMAGE_PATH` dans `main.py` pour spécifier l'image d'entrée.
+
+    ```python
+    IMAGE_PATH = 'data/inputs/INT-QWERTY-1.jpg' 
+    ```
+
+2.  **Exécution :**
+
+    ```bash
+    python main.py
+    ```
+
+### 3.2. Traitement par lots (`run_batch.py`)
+
+Ce mode permet de traiter toutes les images présentes dans `data/inputs/` et de générer un rapport synthétique au format CSV.
+
+1.  **Exécution :**
+
+    ```bash
+    python run_batch.py
+    ```
+
+2.  **Rapport :** Le fichier `data/outputs/rapport_analyse.csv` contiendra les résultats pour chaque image, incluant des indicateurs techniques (`Shift_Ratio`, `OS_Euler`, `TL_Extent`).
+
+### 3.3. Outil d'exploration et de debug (`explore_shape.py`)
+
+Ce script facultatif permet d'inspecter visuellement les touches détectées. En cliquant sur une région, on obtient ses métriques de forme (aire, ratio, Nombre d'Euler, etc.), ce qui est essentiel pour l'affinage des seuils de détection.
+
+## 4. Auteurs
+
+* **HOEDENAEKEN Nicolas**
