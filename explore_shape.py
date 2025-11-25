@@ -1,43 +1,25 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.ndimage import median_filter, binary_opening, binary_closing
-from skimage import io, color, filters, exposure, measure, morphology
 import matplotlib.patches as mpatches
+from skimage import io, measure
+from src.preprocessing import pretraiter_image
+import config
 
-# --- 🔧 PARAMÈTRES AJUSTÉS SUR BASE DE TES DONNÉES ---
-IMAGE_PATH = 'data/inputs/INT-QWERTY-1.jpg' 
+# --- RÉCUPÉRATION DES PARAMÈTRES VIA IMPORT ---
+CONFIG = {
+    'IMAGE_PATH': config.IMAGE_PATH_DEFAULT,
+    'AIRE_MIN': config.AIRE_MIN,
+    'AIRE_MAX': config.AIRE_MAX,
+    'RATIO_MIN': config.RATIO_MIN,
+    'RATIO_MAX': config.RATIO_MAX,
+    'SEUIL_Y_PROXIMITE': config.SEUIL_Y_PROXIMITE
+}
 
-# Paramètres de filtrage (V3.1)
-AIRE_MIN = 2000      # Assez petit pour les touches de fonction (F1-F12) ou flèches
-AIRE_MAX = 400000    # Augmenté (était 100k) -> Pour accepter la barre espace (~250k px)
-
-RATIO_MIN = 0.5      # inchangé (touches hautes comme Entrée ISO)
-RATIO_MAX = 8.0      # Augmenté (était 5.0) -> Pour accepter la barre espace (ratio ~6.5)
-
-# C'est ici que se joue la détection de la ligne du bas
-# Distance max verticale autorisée par rapport au centre du clavier
-SEUIL_Y_PROXIMITE = 1000 # Augmenté (était 500) -> Pour aller chercher la ligne tout en bas
-
-def pretraiter_image_v1(img):
-    """Implémentation stricte du preprocessing.py de la V1"""
-    if len(img.shape) == 3:
-        gris = color.rgb2gray(img)
-    else:
-        gris = img
-
-    filtree = median_filter(gris, size=3)
-    filtree = exposure.equalize_hist(filtree)
-
-    seuil = filters.threshold_otsu(filtree)
-    binaire = filtree > seuil
-
-    nettoyee = binary_opening(binaire, iterations=2)
-    nettoyee = binary_closing(nettoyee, iterations=3)
-
-    return nettoyee, gris
-
-def detecter_regions_v1(img_binaire):
-    """Logique V1 avec paramètres élargis"""
+def detecter_regions_exploration(img_binaire, config):
+    """
+    Logique de détection pour l'exploration.
+    Utilise le dictionnaire de configuration passé en argument.
+    """
     # Inversion nécessaire car measure.label cherche les zones True (Blanches)
     inversee = np.invert(img_binaire.astype(bool))
     
@@ -57,8 +39,9 @@ def detecter_regions_v1(img_binaire):
         aire = r.area
         ratio = largeur / hauteur
 
-        # On filtre large pour ne rien rater
-        if AIRE_MIN <= aire <= AIRE_MAX and RATIO_MIN <= ratio <= RATIO_MAX:
+        # Utilisation du dictionnaire de configuration
+        if (config['AIRE_MIN'] <= aire <= config['AIRE_MAX'] and 
+            config['RATIO_MIN'] <= ratio <= config['RATIO_MAX']):
             candidats_initiaux.append(r)
 
     if not candidats_initiaux:
@@ -69,9 +52,9 @@ def detecter_regions_v1(img_binaire):
     centres_y = [r.centroid[0] for r in candidats_initiaux]
     moyenne_y = np.mean(centres_y)
     
-    # On définit la zone valide
-    y_min_valid = moyenne_y - SEUIL_Y_PROXIMITE
-    y_max_valid = moyenne_y + SEUIL_Y_PROXIMITE
+    # On définit la zone valide, en utilisant le seuil du dictionnaire
+    y_min_valid = moyenne_y - config['SEUIL_Y_PROXIMITE']
+    y_max_valid = moyenne_y + config['SEUIL_Y_PROXIMITE']
     
     bonnes_regions = []
     for r in candidats_initiaux:
@@ -81,40 +64,55 @@ def detecter_regions_v1(img_binaire):
 
     return bonnes_regions, moyenne_y, y_min_valid, y_max_valid
 
+
 def analyser_features(region):
     """Extraction des métriques pour l'analyse de layout"""
     minr, minc, maxr, maxc = region.bbox
     hauteur = maxr - minr
+    largeur = maxc - minc
     cy, cx = region.centroid
     
     # Centre relatif (0.0 haut, 1.0 bas)
     centroid_y_norm = (cy - minr) / hauteur 
     
     return {
-        "ratio": (maxc - minc) / hauteur,
+        "x": int(cx),
+        "y": int(cy),
+        "width": largeur,
+        "height": hauteur,
+        "minc": int(minc),
+        "minr": int(minr),
+        "ratio": largeur / hauteur,
         "extent": region.extent,
         "solidity": region.solidity,
         "euler": region.euler_number,
         "centroid_norm": centroid_y_norm
     }
 
+
 def on_click(event, ax, regions):
+    """Logique de clic améliorée pour afficher plus de détails."""
     if event.inaxes != ax: return
-    x, y = event.xdata, event.ydata
+    x_click, y_click = event.xdata, event.ydata
     
-    print(f"\n🖱️ Clic en ({int(x)}, {int(y)})")
+    print(f"\n🖱️ Clic en ({int(x_click)}, {int(y_click)})")
     
     for r in regions:
         minr, minc, maxr, maxc = r.bbox
-        if minc <= x <= maxc and minr <= y <= maxr:
+        if minc <= x_click <= maxc and minr <= y_click <= maxr:
             stats = analyser_features(r)
+            
+            # --- Affichage amélioré ---
             print("-" * 40)
             print(f"🎯 TOUCHE SÉLECTIONNÉE")
-            print(f"   Aire         : {r.area} px")
-            print(f"   Ratio (L/H)  : {stats['ratio']:.2f}")
-            print(f"   Extent       : {stats['extent']:.2f}")
-            print(f"   Euler        : {stats['euler']}")
-            print(f"   Centre Y Rel : {stats['centroid_norm']:.2f}")
+            print(f"   Coordonnées BBox (Min C/R) : ({stats['minc']}, {stats['minr']})")
+            print(f"   Centre (X, Y) : ({stats['x']}, {stats['y']}) px")
+            print(f"   Dimensions (L x H) : {stats['width']} x {stats['height']} px")
+            print(f"   Aire                  : {r.area} px")
+            print(f"   Ratio (L/H)           : {stats['ratio']:.2f}")
+            print(f"   Extent                : {stats['extent']:.2f}")
+            print(f"   Euler                 : {stats['euler']}")
+            print(f"   Centre Y Relatif      : {stats['centroid_norm']:.2f}")
             
             # Détection basique pour info
             verdict = "Inconnu"
@@ -122,7 +120,7 @@ def on_click(event, ax, regions):
             elif stats['ratio'] > 1.8: verdict = "Shift/Enter/Cmd ?"
             elif stats['euler'] < 0: verdict = "Command (Mac) ?"
             
-            print(f"   -> Hypothèse : {verdict}")
+            print(f"   -> Hypothèse          : {verdict}")
             print("-" * 40)
             
             rect = mpatches.Rectangle((minc, minr), maxc - minc, maxr - minr,
@@ -131,28 +129,34 @@ def on_click(event, ax, regions):
             event.canvas.draw()
             return
 
+
 def main():
-    print(f"Chargement de {IMAGE_PATH}...")
-    try: img = io.imread(IMAGE_PATH)
+    image_path = CONFIG['IMAGE_PATH']
+    print(f"Chargement de {image_path}...")
+    try: 
+        img = io.imread(image_path)
     except Exception as e: 
         print(f"Erreur: {e}")
         return
 
+    # Utilisation de la fonction importée du module src.preprocessing
     print("Prétraitement...")
-    img_bin, img_gris = pretraiter_image_v1(img)
+    img_bin, img_gris = pretraiter_image(img) # Remplacement de pretraiter_image_v1
 
-    print("Détection des touches (Paramètres élargis)...")
-    regions, mean_y, y_min, y_max = detecter_regions_v1(img_bin)
+    # Appel de la fonction d'exploration avec la configuration
+    print("Détection des touches (Paramètres explorés)...")
+    regions, mean_y, y_min, y_max = detecter_regions_exploration(img_bin, CONFIG)
     
     if len(regions) == 0:
         print("❌ Aucune touche trouvée. Vérifiez le seuillage.")
         return
 
+    # Affichage des résultats en console
     print(f"✅ {len(regions)} touches détectées.")
     print(f"📍 Centre Y moyen : {mean_y:.0f} px")
     print(f"📐 Zone acceptée : Y={y_min:.0f} à Y={y_max:.0f}")
 
-    # Affichage
+    # --- Affichage Matplotlib (inchangé) ---
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
     
     # Vue Résultats
@@ -176,7 +180,7 @@ def main():
     ax2.set_title("Masque inversé (ce que voit l'algo)")
 
     print("\n💡 INFO: Les lignes rouges horizontales montrent la zone de recherche.")
-    print("   Si des touches sont en dehors, augmentez SEUIL_Y_PROXIMITE.")
+    print(f"   Si des touches sont en dehors, augmentez SEUIL_Y_PROXIMITE ({CONFIG['SEUIL_Y_PROXIMITE']}).")
     print("   Cliquez sur les touches (Espace, Cmd, etc.) pour vérifier leurs stats.")
     
     fig.canvas.mpl_connect('button_press_event', lambda event: on_click(event, ax1, regions))
