@@ -38,7 +38,7 @@ def analyser_image(image_path):
         img_bin, img_gris = pretraiter_image(img)
         
         # 3. Détection
-        # Utilisation des paramètres de config
+
         touches, _, _, _ = detecter_touches(
             img_bin,
             aire_min=config.AIRE_MIN,
@@ -59,6 +59,7 @@ def analyser_image(image_path):
         if rois is None or not rois.get("SPACE") or not rois.get("SHIFT") or not rois.get("OS_KEY"):
             resultat["Statut"] = "ÉCHEC (ROIs clés manquantes)"
             return resultat
+
 
 
         # 5. Classification

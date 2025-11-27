@@ -8,7 +8,6 @@ from src.analysis import detecter_touches, identifier_zones_cles, classifier_cla
 import config
 
 # --- CONFIGURATION ---
-# Utilise le chemin par défaut du fichier de configuration
 IMAGE_PATH = config.IMAGE_PATH_DEFAULT 
 
 def main():
