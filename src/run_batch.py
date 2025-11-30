@@ -2,33 +2,40 @@ import os
 import csv
 import glob
 from skimage import io
-import pandas as pd
 import config
+from datetime import datetime
 
 from src.preprocessing import pretraiter_image
 from src.analysis import detecter_touches, identifier_zones_cles, classifier_clavier
-
-# Ce script permet de faire des tests sur un lot de photos.
+from src.debug_utils import generer_rapport_html
 
 # --- CONFIGURATION ---
 INPUT_DIR = 'data/inputs'
-OUTPUT_FILE = 'data/outputs/rapport_analyse.csv'
-EXTENSIONS = ['*.jpg', '*.jpeg', '*.png', '*.tif']
+OUTPUT_DIR = 'data/outputs'
+OUTPUT_CSV = os.path.join(OUTPUT_DIR, 'rapport_analyse.csv')
+OUTPUT_HTML = os.path.join(OUTPUT_DIR, 'rapport_analyse.html')
+EXTENSIONS = ['*.jpg', '*.jpeg', '*.png', '*.tif', '*.bmp']
 
-def analyser_image(image_path):
-    """Exécute le pipeline complet sur une image et retourne un dictionnaire de résultats."""
+def analyser_image(image_path, verbose=True):
+    """
+    Exécute le pipeline complet sur une image.
+    Retourne un dictionnaire de résultats détaillés.
+    """
     nom_fichier = os.path.basename(image_path)
+    
     resultat = {
         "Fichier": nom_fichier,
         "Statut": "OK",
         "Format": "N/A",
         "OS": "N/A",
         "Langue": "N/A",
-        "Shift_Ratio": 0.0,
-        "OS_Euler": 0,
-        "TL_Extent": 0.0,
         "NB_Touches": 0,
-        "Enter_Ratio_H_L": 0.0 # NOUVEAU
+        "Shift_Ratio": 0.0,
+        "Enter_Ratio_H_L": 0.0,
+        "OS_Euler": 0,
+        "TL_CenterY": 0.0,
+        "TL_Extent": 0.0,
+        "h_ref": 0.0
     }
 
     try:
@@ -39,50 +46,66 @@ def analyser_image(image_path):
         img_bin, img_gris = pretraiter_image(img)
         
         # 3. Détection
-
-        touches, _, _, _ = detecter_touches(
-            img_bin,
-            aire_min=config.AIRE_MIN,
-            aire_max=config.AIRE_MAX,
-            ratio_max=config.RATIO_MAX,
-            seuil_y=config.SEUIL_Y_PROXIMITE
-        )
+        touches, _, _, _ = detecter_touches(img_bin)
         resultat["NB_Touches"] = len(touches)
         
-        if len(touches) < 10:
-            resultat["Statut"] = "ÉCHEC (Pas assez de touches)"
+        if len(touches) < config.MIN_TOUCHES_DETECTEES:
+            resultat["Statut"] = f"ÉCHEC (Seulement {len(touches)} touches, min: {config.MIN_TOUCHES_DETECTEES})"
             return resultat
 
         # 4. Zoning
         rois = identifier_zones_cles(touches)
         
-        # Vérification minimale de la présence des zones clés
-        if rois is None or not rois.get("SPACE") or not rois.get("SHIFT") or not rois.get("OS_KEY"):
-            resultat["Statut"] = "ÉCHEC (ROIs clés manquantes)"
+        if rois is None:
+            resultat["Statut"] = "ÉCHEC (Identification des zones clés impossible)"
+            return resultat
+        
+        # Vérification des zones critiques
+        zones_manquantes = []
+        for zone in ["SPACE", "SHIFT", "OS_KEY"]:
+            if not rois.get(zone):
+                zones_manquantes.append(zone)
+        
+        if zones_manquantes:
+            resultat["Statut"] = f"ÉCHEC (Zones manquantes: {', '.join(zones_manquantes)})"
             return resultat
 
-
-
         # 5. Classification
-        verdict, debug = classifier_clavier(rois, img_gris)
+        verdict, debug = classifier_clavier(rois, img_gris, touches)
         
         # Remplissage des résultats
         resultat["Format"] = verdict.get("ISO_ANSI", "?")
         resultat["OS"] = verdict.get("MAC_WIN", "?")
         resultat["Langue"] = verdict.get("LAYOUT", "?")
         
-        # Données techniques (si disponibles dans debug)
+        # Métriques techniques
         resultat["Shift_Ratio"] = round(debug.get("Shift_Ratio", 0), 2)
+        resultat["Enter_Ratio_H_L"] = round(debug.get("Enter_Ratio_H_L", 0), 2)
         resultat["OS_Euler"] = debug.get("OS_Euler", 0)
-        resultat["TL_Extent"] = round(debug.get("TL_Extent", 0), 2)
-        resultat["Enter_Ratio_H_L"] = round(debug.get("Enter_Ratio_H_L", 0), 2) # NOUVEAU
+        resultat["TL_CenterY"] = round(debug.get("TL_CenterY", 0), 3)
+        resultat["TL_Extent"] = round(debug.get("TL_Extent", 0), 3)
+        resultat["h_ref"] = round(rois.get("h_ref", 0), 1)
+        
+        # Ajout de la confiance OCR si disponible
+        if "Layout_Confiance" in debug:
+            resultat["OCR_Confiance"] = round(debug["Layout_Confiance"], 2)
 
     except Exception as e:
-        resultat["Statut"] = f"ERREUR ({str(e)})"
+        resultat["Statut"] = f"ERREUR ({str(e)[:50]})"
+        if verbose:
+            print(f"      Exception détaillée: {str(e)}")
     
     return resultat
 
+
 def main():
+    print("="*70)
+    print("🔄 TRAITEMENT PAR LOT - ANALYSE DE CLAVIERS")
+    print("="*70)
+    print(f"Répertoire d'entrée: {INPUT_DIR}")
+    print(f"Fichier de sortie CSV: {OUTPUT_CSV}")
+    print(f"Fichier de sortie HTML: {OUTPUT_HTML}\n")
+    
     # 1. Récupération des fichiers
     fichiers = []
     for ext in EXTENSIONS:
@@ -90,42 +113,91 @@ def main():
     
     if not fichiers:
         print(f"❌ Aucun fichier trouvé dans {INPUT_DIR}")
+        print(f"   Extensions recherchées: {', '.join(EXTENSIONS)}")
         return
 
-    print(f"Lancement du traitement par lots sur {len(fichiers)} images...\n")
+    print(f"📁 {len(fichiers)} image(s) trouvée(s)\n")
+    print("-"*70)
     
     resultats_globaux = []
-
+    success_count = 0
+    
     # 2. Boucle de traitement
+    start_time = datetime.now()
+    
     for i, fichier in enumerate(fichiers):
-        # Enlever \r pour un affichage propre
-        print(f"[{i+1}/{len(fichiers)}] Traitement de {os.path.basename(fichier)}...          ") 
-        donnees = analyser_image(fichier)
+        nom_court = os.path.basename(fichier)
+        print(f"\n[{i+1}/{len(fichiers)}] 🔍 Traitement: {nom_court}")
+        
+        donnees = analyser_image(fichier, verbose=config.DEBUG_MODE)
         resultats_globaux.append(donnees)
         
-        # Petit feedback visuel immédiat
-        status_icon = "✅" if "OK" in donnees["Statut"] else "⚠️"
-        print(f"{status_icon} {donnees['Fichier']:<25} -> {donnees['Format']} | {donnees['OS']} | {donnees['Langue']} | Statut: {donnees['Statut']}")
+        # Feedback visuel
+        if "OK" in donnees["Statut"]:
+            success_count += 1
+            icon = "✅"
+            color_code = "\033[92m"  # Vert
+        else:
+            icon = "❌"
+            color_code = "\033[91m"  # Rouge
+        
+        reset_code = "\033[0m"
+        
+        print(f"   {icon} {color_code}Statut: {donnees['Statut']}{reset_code}")
+        
+        if "OK" in donnees["Statut"]:
+            print(f"      Format: {donnees['Format']}")
+            print(f"      OS: {donnees['OS']}")
+            print(f"      Layout: {donnees['Langue']}")
+            print(f"      Touches: {donnees['NB_Touches']}")
+    
+    # Temps d'exécution
+    elapsed = (datetime.now() - start_time).total_seconds()
+    
+    print("\n" + "="*70)
+    print("📊 RÉSUMÉ DU TRAITEMENT")
+    print("="*70)
+    print(f"✅ Succès: {success_count}/{len(fichiers)} ({success_count/len(fichiers)*100:.1f}%)")
+    print(f"❌ Échecs: {len(fichiers) - success_count}/{len(fichiers)}")
+    print(f"⏱️  Temps total: {elapsed:.1f}s ({elapsed/len(fichiers):.2f}s/image)")
+    print("="*70)
 
     # 3. Sauvegarde CSV
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+    print(f"\n💾 Sauvegarde des résultats...")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     
-    # NOUVEAU: Ajout de Enter_Ratio_H_L dans les colonnes CSV
-    colonnes = ["Fichier", "Statut", "Format", "OS", "Langue", "NB_Touches", "Shift_Ratio", "Enter_Ratio_H_L", "OS_Euler", "TL_Extent"]
+    colonnes = [
+        "Fichier", "Statut", "Format", "OS", "Langue", "NB_Touches",
+        "Shift_Ratio", "Enter_Ratio_H_L", "OS_Euler", 
+        "TL_CenterY", "TL_Extent", "h_ref"
+    ]
+    
+    # Ajouter OCR_Confiance si présent
+    if any("OCR_Confiance" in r for r in resultats_globaux):
+        colonnes.append("OCR_Confiance")
     
     try:
-        with open(OUTPUT_FILE, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=colonnes)
+        with open(OUTPUT_CSV, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=colonnes, extrasaction='ignore')
             writer.writeheader()
-            for data in resultats_globaux:
-                # On filtre pour n'écrire que les colonnes définies
-                clean_data = {k: data.get(k, "N/A") for k in colonnes}
-                writer.writerow(clean_data)
+            writer.writerows(resultats_globaux)
         
-        print(f"\nRapport complet généré : {OUTPUT_FILE}")
+        print(f"   ✓ CSV sauvegardé: {OUTPUT_CSV}")
         
     except IOError as e:
-        print(f"\n❌ Erreur d'écriture du fichier CSV : {e}")
+        print(f"   ❌ Erreur d'écriture CSV: {e}")
+        return
+    
+    # 4. Génération du rapport HTML
+    try:
+        generer_rapport_html(resultats_globaux, OUTPUT_HTML)
+        print(f"   ✓ HTML sauvegardé: {OUTPUT_HTML}")
+    except Exception as e:
+        print(f"   ⚠️  Erreur génération HTML: {e}")
+    
+    print("\n✅ Traitement par lot terminé avec succès!")
+    print(f"📄 Consultez les rapports dans: {OUTPUT_DIR}\n")
+
 
 if __name__ == "__main__":
     main()
