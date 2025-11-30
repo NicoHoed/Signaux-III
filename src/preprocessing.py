@@ -13,6 +13,8 @@ def pretraiter_image(img):
     """
     # 1. Conversion en niveaux de gris
     if len(img.shape) == 3:
+        if img.shape[-1] == 4:
+            img = img[..., :3]
         gris = color.rgb2gray(img)
     else:
         gris = img
