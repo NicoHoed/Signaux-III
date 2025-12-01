@@ -6,10 +6,11 @@ Contrairement aux approches classiques basées sur des zones fixes, ce projet ut
 
 ## Fonctionnalités
 
-* **Robustesse visuelle :** Utilise 3 méthodes de prétraitement simultanées (Adaptive Threshold, LAB Channel, Inversion) pour gérer les reflets et les claviers noirs/blancs.
-* **Intelligence Géométrique :** Utilise l'algorithme K-Means pour regrouper dynamiquement les touches par rangées (Haut/Milieu/Bas), indépendamment de l'angle de la photo.
-* **Moteur OCR puissant :** Basé sur `EasyOCR` pour une lecture précise des caractères.
-* **Mode Benchmark (GUI) :** Interface graphique pour valider automatiquement un lot d'images et calculer le taux de précision.
+- **Approche "Shotgun" (Multi-Vues) :** L'image est traitée simultanément par **4 algorithmes de vision** distincts (CLAHE, Adaptive Threshold, LAB, Inversion) pour maximiser les chances de lecture, quelles que soient les conditions (reflets, ombres, touches noires ou blanches).
+- **Intelligence Géométrique :** Utilise l'algorithme **K-Means** pour regrouper dynamiquement les touches par rangées physiques (Haut/Milieu/Bas), rendant le système invariant à la rotation.
+- **OCR:** Basé sur `EasyOCR` (PyTorch) pour une lecture robuste des caractères, même flous ou stylisés.
+- **Système de Scoring Expert :** Un algorithme de décision pondéré qui applique des bonus pour les lettres clés et des malus fatals pour les contradictions.
+- **Mode Benchmark (GUI) :** Interface graphique incluse pour valider automatiquement un lot d'images et calculer le taux de précision (Accuracy).
 
 ## Structure du Projet
 
@@ -91,12 +92,41 @@ python gui_benchmark.py
 1.  Cliquez sur **"Charger l'OCR"** (patientez quelques secondes).
 2.  Cliquez sur **"LANCER L'ANALYSE"**.
 
-## Comment ça marche ?
+## Fonctionnement
 
-1.  **Shotgun Preprocessing :** L'image est dupliquée et traitée avec 3 filtres différents pour maximiser la lisibilité.
-2.  **OCR Pipeline :** EasyOCR scanne les 3 versions. Seules les lettres détectées avec une confiance suffisante sont conservées.
-3.  **Clustering K-Means :** L'algorithme analyse la position Y (verticale) de toutes les lettres trouvées pour identifier mathématiquement 3 clusters (les 3 rangées du clavier).
-4.  **Scoring Pondéré :** Le moteur vérifie la présence de lettres clés (A, Z, Q, W, M...) dans les clusters identifiés. Des points sont attribués ou retirés  pour déterminer le layout final avec un indice de confiance.
+Le pipeline de détection suit 4 étapes rigoureuses pour chaque image :
+
+1. Prétraitement "Shotgun" (Preprocessing)
+
+Au lieu de parier sur un seul réglage, nous générons 4 versions de l'image pour aider l'OCR :
+
+- Adaptive Threshold : Calcule le seuil de binarisation localement. Idéal pour gérer les reflets sur les touches plastiques.
+
+- LAB Channel (Luminance) : Isole la luminosité en ignorant la couleur. Efficace pour les claviers colorés ou rétroéclairés.
+
+- Inversion : Inverse les couleurs (Négatif). Les moteurs OCR préfèrent souvent le texte noir sur fond blanc ; cette méthode sauve les claviers à touches noires.
+
+- CLAHE (Contrast Limited Adaptive Histogram Equalization) : Égalise l'histogramme localement pour rehausser le contraste dans les zones sombres. Redoutable pour les photos avec des ombres portées.
+
+2. Extraction OCR & Fusion
+
+EasyOCR scanne les 4 versions de l'image.
+
+Les résultats sont fusionnés : une lettre n'est validée que si elle est détectée avec une confiance suffisante. Un filtre nettoie les erreurs fréquentes (ex: | devient I, 0 devient O).
+
+3. Clustering Géométrique (K-Means 1D)
+
+On récupère la coordonnée Y (hauteur) de chaque lettre validée. L'algorithme K-Means analyse ce nuage de points et cherche mathématiquement 3 clusters (groupes). Cela permet d'identifier les rangées physiques (Haut / Milieu / Bas) sans connaître l'angle de la photo. Si le clavier est penché, les clusters s'adaptent.
+
+4. Scoring Pondéré
+
+Le moteur analyse le contenu de chaque cluster identifié :
+
+- Bonus (+15 pts) : Si une lettre discriminante est à sa place (ex: A en haut pour AZERTY, Z en bas pour QWERTY).
+
+- Malus Fatal (-50 pts) : Si une lettre contredit formellement un layout (ex: trouver un Q dans la rangée du haut rend le layout AZERTY impossible).
+
+- Le layout avec le score positif le plus élevé l'emporte.
 
 ## Auteur
 
@@ -105,4 +135,4 @@ Théo MERTENS
 Baris OZCELIK
 Khassan AKTAMIROV
 
-Projet réalisé dans le cadre du cours de Signaux III.
+Projet réalisé dans le cadre du cours de Signaux III a l'EPHEC.
