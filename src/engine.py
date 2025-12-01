@@ -1,68 +1,73 @@
 import easyocr
 import numpy as np
 from collections import Counter
-from sklearn.mixture import GaussianMixture # Pour le clustering
+from sklearn.cluster import KMeans # On change GMM pour KMeans (plus robuste ici)
 import warnings
 
-# Mapping pour corriger les erreurs fréquentes d'OCR sur les touches
+# Mapping pour corriger les erreurs fréquentes d'OCR
 OCR_CORRECTIONS = {
     '0': 'O', '1': 'I', '5': 'S', '2': 'Z', '4': 'A', '8': 'B', 
-    '|': 'I', '$': 'S', '€': 'E', '(': 'C'
+    '|': 'I', '$': 'S', '€': 'E', '(': 'C', '[': 'C', '{': 'C'
 }
 
-# Définition stricte des rangées
-LAYOUTS = {
+# --- DÉFINITION INTELLIGENTE DES LAYOUTS ---
+# On ne définit plus des lignes entières rigides, mais des "Marqueurs forts"
+LAYOUT_RULES = {
     "AZERTY": {
-        "rows": ["AZERTYUIOP", "QSDFGHJKLM", "WXCVBN"],
-        "indicators": ["A", "Z", "M"] # Lettres discriminantes
+        # Si je trouve ces lettres en HAUT, c'est +++ pour AZERTY
+        "TOP":  {'A', 'Z', 'E', 'R', 'T'}, 
+        # Si je trouve ces lettres au MILIEU, c'est +++ pour AZERTY
+        "MID":  {'Q', 'S', 'D', 'F', 'G', 'M'}, # M est au milieu en AZERTY (souvent)
+        # Si je trouve ces lettres en BAS, c'est +++ pour AZERTY
+        "BOT":  {'W', 'X', 'C', 'V'}
     },
     "QWERTY": {
-        "rows": ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"],
-        "indicators": ["Q", "W", "A"]
+        "TOP":  {'Q', 'W', 'E', 'R', 'T', 'Y'},
+        "MID":  {'A', 'S', 'D', 'F', 'G'},
+        "BOT":  {'Z', 'X', 'C', 'V'}
     },
     "QWERTZ": {
-        "rows": ["QWERTZUIOP", "ASDFGHJKL", "YXCVBNM"],
-        "indicators": ["Z", "Y"]
+        "TOP":  {'Q', 'W', 'E', 'R', 'T', 'Z'}, # Z est en haut !
+        "MID":  {'A', 'S', 'D', 'F', 'G'},
+        "BOT":  {'Y', 'X', 'C', 'V'}            # Y est en bas !
     }
 }
 
 def clean_char(text):
     text = text.upper().strip()
-    if len(text) > 1: return "" # On veut des lettres uniques
+    # On nettoie les caractères non alphanumériques sauf s'ils ressemblent à des lettres
+    text = ''.join(filter(str.isalnum, text))
+    if len(text) != 1: return ""
     return OCR_CORRECTIONS.get(text, text)
 
 def run_ocr_pipeline(reader, processed_images):
-    """
-    Lance l'OCR sur toutes les versions de l'image et fusionne les résultats.
-    Retourne: { 'A': {'count': 2, 'avg_y': 150.5}, ... }
-    """
     char_data = {}
 
     for method_name, img in processed_images:
-        # Allowlist pour forcer EasyOCR à ne chercher que ça
-        results = reader.readtext(img, allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
+        # On utilise une allowlist large
+        try:
+            results = reader.readtext(img, allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
+        except Exception:
+            continue
         
         for (bbox, text, conf) in results:
-            if conf < 0.4: continue # Filtre confiance faible
+            if conf < 0.3: continue # On est un peu plus tolérant (0.3 vs 0.4)
             
             char = clean_char(text)
             if not char or not char.isalpha(): continue
 
-            # Calcul du centre Y de la lettre (pour le clustering)
-            # bbox = [[tl, tr, br, bl]] -> y est à l'index 1
+            # Centre Y
             y_center = (bbox[0][1] + bbox[2][1]) / 2
 
             if char not in char_data:
-                char_data[char] = {'y_sum': 0, 'count': 0, 'confs': []}
+                char_data[char] = {'y_sum': 0, 'count': 0}
             
             char_data[char]['y_sum'] += y_center
             char_data[char]['count'] += 1
-            char_data[char]['confs'].append(conf)
 
-    # Filtrage : on ne garde que les lettres vues sur au moins 1 méthode (ou 2 pour être strict)
+    # On garde les lettres vues au moins 1 fois (pour maximiser les chances)
     validated_chars = {}
     for char, data in char_data.items():
-        # On calcule la position Y moyenne de la lettre
         avg_y = data['y_sum'] / data['count']
         validated_chars[char] = avg_y
 
@@ -70,32 +75,34 @@ def run_ocr_pipeline(reader, processed_images):
 
 def cluster_rows(validated_chars):
     """
-    Utilise le Gaussian Mixture Model pour trouver les 3 rangées clavier
-    basé sur la position Y des lettres.
+    K-MEANS 1D : Plus stable que GMM pour séparer 3 niveaux de hauteur.
     """
-    if len(validated_chars) < 5:
-        return None # Pas assez de données
+    if len(validated_chars) < 4:
+        return None
 
-    # Préparation des données pour sklearn (tableau 2D)
     y_coords = np.array(list(validated_chars.values())).reshape(-1, 1)
     
-    # On cherche 3 clusters (Haut, Milieu, Bas)
+    # On tente de trouver 3 rangées. Si ça échoue (trop peu de points), on tente 2.
+    n_clusters = 3
+    if len(y_coords) < 3: n_clusters = len(y_coords)
+
     try:
-        gmm = GaussianMixture(n_components=3, random_state=42)
-        labels = gmm.fit_predict(y_coords)
-        means = gmm.means_.flatten()
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(y_coords)
+        centers = kmeans.cluster_centers_.flatten()
         
-        # On trie les clusters par position Y (0 = Haut, 1 = Milieu, 2 = Bas)
-        sorted_indices = np.argsort(means)
+        # On trie les centres pour savoir qui est HAUT (petit Y), MILIEU, BAS (grand Y)
+        sorted_indices = np.argsort(centers)
+        
+        # Mapping du cluster ID vers le Row ID (0=Haut, 1=Milieu, 2=Bas)
         map_cluster = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted_indices)}
         
-        # On associe chaque lettre à sa rangée (0, 1 ou 2)
         char_rows = {}
         chars_list = list(validated_chars.keys())
         for i, char in enumerate(chars_list):
-            original_cluster = labels[i]
-            corrected_row = map_cluster[original_cluster]
-            char_rows[char] = corrected_row
+            original_label = labels[i]
+            row_id = map_cluster[original_label]
+            char_rows[char] = row_id
             
         return char_rows
     except Exception as e:
@@ -104,44 +111,72 @@ def cluster_rows(validated_chars):
 
 def score_layout(char_to_row_map):
     """
-    Compare la position réelle des lettres (char_to_row_map)
-    avec la position théorique des layouts.
+    Nouveau système de scoring pondéré.
     """
-    scores = {k: 0 for k in LAYOUTS.keys()}
+    scores = {k: 0 for k in LAYOUT_RULES.keys()}
     
-    if not char_to_row_map:
-        return "UNKNOWN", 0, {}
+    # On compte combien de lettres pertinentes on a trouvées au total
+    relevant_chars_found = 0
 
-    for layout_name, layout_data in LAYOUTS.items():
-        ref_rows = layout_data["rows"]
+    for char, detected_row in char_to_row_map.items():
+        # 0=TOP, 1=MID, 2=BOT
         
-        for char, detected_row_idx in char_to_row_map.items():
-            # Dans quelle rangée cette lettre DEVRAIT être pour ce layout ?
-            expected_row_idx = -1
-            for idx, row_str in enumerate(ref_rows):
-                if char in row_str:
-                    expected_row_idx = idx
-                    break
+        relevant_chars_found += 1
+        
+        for layout_name, rules in LAYOUT_RULES.items():
             
-            if expected_row_idx != -1:
-                if expected_row_idx == detected_row_idx:
-                    # +2 points si la lettre est exactement dans la bonne rangée
-                    scores[layout_name] += 2
-                    
-                    # +5 points bonus si c'est une lettre clé (A, Z, Q, W)
-                    if char in layout_data["indicators"]:
-                        scores[layout_name] += 5
-                else:
-                    # -2 points si la lettre est dans la mauvaise rangée (ex: Q en bas)
-                    scores[layout_name] -= 2
-            else:
-                # Lettre neutre ou absente du layout
-                pass
+            # --- RÈGLES POSITIVES (Bonus) ---
+            if detected_row == 0 and char in rules["TOP"]:
+                scores[layout_name] += 10 # Gros bonus si bonne lettre en haut
+                # Bonus Spécial AZERTY/QWERTY
+                if char in ['A', 'Q', 'Z', 'W']: scores[layout_name] += 15 
+
+            elif detected_row == 1 and char in rules["MID"]:
+                scores[layout_name] += 10
+                if char in ['A', 'Q', 'M']: scores[layout_name] += 15
+
+            elif detected_row == 2 and char in rules["BOT"]:
+                scores[layout_name] += 10
+                if char in ['W', 'Z', 'Y', 'M']: scores[layout_name] += 15
+
+            # --- RÈGLES NÉGATIVES (Malus / Contradiction) ---
+            # Si je vois un 'Q' en haut, ce N'EST PAS un AZERTY
+            if detected_row == 0 and char == 'Q':
+                scores['AZERTY'] -= 50
+            
+            # Si je vois un 'A' en haut, ce N'EST PAS un QWERTY/QWERTZ
+            if detected_row == 0 and char == 'A':
+                scores['QWERTY'] -= 50
+                scores['QWERTZ'] -= 50
+
+            # Si je vois un 'Z' en haut, ce N'EST PAS un QWERTY (Z est en bas)
+            if detected_row == 0 and char == 'Z':
+                scores['QWERTY'] -= 50
+                # C'est soit AZERTY soit QWERTZ
+
+            # Si je vois un 'Y' en bas, c'est probablement QWERTZ
+            if detected_row == 2 and char == 'Y':
+                scores['QWERTZ'] += 40
+                scores['QWERTY'] -= 20 # Y est en haut en QWERTY
+
+    # Normalisation et décision
+    if relevant_chars_found == 0:
+        return "INCONNU", 0, scores
 
     best_layout = max(scores, key=scores.get)
     max_score = scores[best_layout]
     
-    # Confiance basique (normalisation)
-    confidence = min(100, max(0, max_score * 2)) 
-    
+    # Confiance relative (écart avec le deuxième meilleur)
+    sorted_scores = sorted(scores.values(), reverse=True)
+    if len(sorted_scores) > 1:
+        margin = sorted_scores[0] - sorted_scores[1]
+        # Si la marge est grande (>50 pts), confiance max
+        confidence = min(100, max(0, 50 + margin)) 
+    else:
+        confidence = 0
+
+    # Si le score est négatif ou très bas, on doute
+    if max_score <= 0:
+        return "INCERTAIN", 0, scores
+
     return best_layout, confidence, scores
