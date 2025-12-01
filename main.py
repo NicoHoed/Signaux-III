@@ -1,113 +1,96 @@
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from skimage import io
-import numpy as np
-
-from src.preprocessing import pretraiter_image
-from src.analysis import detecter_touches, identifier_zones_cles, classifier_clavier
-import config
-
-# --- CONFIGURATION ---
-IMAGE_PATH = config.IMAGE_PATH_DEFAULT 
-
-def main():
-    print(f"🚀 Démarrage de l'analyse sur {IMAGE_PATH}...")
+"""
+--------------------------------------------------------------------------------
+File: main.py
+Authors:
+    Nicolas HOEDENAEKEN
+    Théo MERTENS
+    Baris OZCELIK
+    Khassan AKTAMIROV
     
-    try:
-        img = io.imread(IMAGE_PATH)
-    except FileNotFoundError:
-        print(f"❌ Erreur: Image non trouvée dans {IMAGE_PATH}")
+Description: 
+    Point d'entrée CLI du projet.
+    Parcourt le dossier data/inputs et analyse chaque image pour déterminer
+    le layout du clavier. Affiche les détails du clustering et du scoring
+    dans la console.
+--------------------------------------------------------------------------------
+"""
+
+import cv2
+import easyocr
+import os
+import sys
+
+from src.preprocessing import get_processed_images
+from src.engine import run_ocr_pipeline, cluster_rows, score_layout
+
+def analyze_image(image_path, reader):
+    print(f"\n--- Analyse de : {os.path.basename(image_path)} ---")
+    
+    # 1. Chargement
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"❌ Erreur: Impossible de lire l'image à {image_path}")
         return
 
-    # 1. Prétraitement
-    print("1️⃣  Prétraitement...")
-    # On récupère l'image binaire (pour détection) ET grise (pour analyse fine)
-    img_bin, img_gris = pretraiter_image(img)
+    # 2. Prétraitement (3 versions)
+    processed = get_processed_images(img)
+    print("Prétraitement terminé")
 
-    # 2. Détection
-    print("2️⃣  Détection des touches...")
-    # PASSAGE DES PARAMÈTRES DE CONFIGURATION EXPLICITEMENT
-    touches, mean_y, y_min, y_max = detecter_touches(
-        img_bin,
-        aire_min=config.AIRE_MIN,
-        aire_max=config.AIRE_MAX,
-        ratio_max=config.RATIO_MAX,
-        seuil_y=config.SEUIL_Y_PROXIMITE
-    )
-    print(f"   -> {len(touches)} touches candidates trouvées.")
-
-    # 3. Identification des zones (Zoning)
-    print("3️⃣  Identification des zones clés...")
-    rois = identifier_zones_cles(touches)
+    # 3. OCR (Extraction des lettres et positions Y)
+    print("OCR en cours...")
+    validated_chars = run_ocr_pipeline(reader, processed)
     
-    if rois is None:
-        print("❌ Échec : Impossible de repérer la structure du clavier.")
+    detected_list = list(validated_chars.keys())
+    #print(f"Lettres détectées ({len(detected_list)}) : {sorted(detected_list)}")
+
+    if len(detected_list) < 5:
+        print("Pas assez de lettres pour déterminer le layout.")
         return
 
-    # 4. Classification
-    print("4️⃣  Classification du layout...")
-    verdict, debug = classifier_clavier(rois, img_gris)
+    # 4. Clustering (Détermination des rangées Haut/Milieu/Bas)
+    char_rows = cluster_rows(validated_chars)
+    if char_rows:
+        # Petit affichage debug des rangées trouvées
+        rows_debug = {0: [], 1: [], 2: []}
+        for c, r in char_rows.items(): 
+            if r in rows_debug: rows_debug[r].append(c)
+        
+        #print(f"   📐 Rangée Haut   : {sorted(rows_debug[0])}")
+        #print(f"   📐 Rangée Milieu : {sorted(rows_debug[1])}")
+        #print(f"   📐 Rangée Bas    : {sorted(rows_debug[2])}")
+    else:
+        print("❌ Echec du clustering des rangées.")
+        return
 
-    # --- AFFICHAGE RÉSULTATS TERMINAL ---
+    # 5. Scoring & Résultat
+    best_layout, confidence, details = score_layout(char_rows)
+    
     print("\n" + "="*30)
-    print("🏆 RÉSULTATS DE L'ANALYSE")
+    print(f"RÉSULTAT : {best_layout}")
+    print(f"Confiance : {confidence:.1f}%")
     print("="*30)
-    print(f"🌍 Format  : {verdict['ISO_ANSI']}")
-    print(f"💻 Système : {verdict['MAC_WIN']}")
-    print(f"⌨️  Langue  : {verdict['LAYOUT']}")
-    print("-" * 30)
-    print("📊 Données techniques :")
-    for k, v in debug.items():
-        # Affichage des nouvelles métriques
-        print(f"   - {k} : {v:.2f}") 
-    print("="*30)
-
-    # --- VISUALISATION GRAPHIQUE ---
-    fig, ax = plt.subplots(figsize=(12, 8))
-    ax.imshow(img, cmap='gray')
-    ax.set_title(f"Analyse : {verdict['LAYOUT']} - {verdict['MAC_WIN']} - {verdict['ISO_ANSI']}")
-
-    # Dessiner les zones de recherche Y (lignes rouges)
-    ax.axhline(y=y_min, color='red', linestyle='--', alpha=0.3, label='Zone de filtrage')
-    ax.axhline(y=y_max, color='red', linestyle='--', alpha=0.3)
-
-    # Couleurs pour les touches identifiées
-    colors = {
-        "SPACE": "blue",
-        "SHIFT": "orange",
-        "TL_LETTER": "green",
-        "OS_KEY": "magenta",
-        "ENTER_KEY": "cyan" # NOUVEAU
-    }
-
-    # Dessiner toutes les touches en vert pâle
-    for r in touches:
-        rect = mpatches.Rectangle((r.bbox[1], r.bbox[0]), 
-                                  r.bbox[3] - r.bbox[1], 
-                                  r.bbox[2] - r.bbox[0],
-                                  fill=False, edgecolor='#00FF00', linewidth=1, alpha=0.3)
-        ax.add_patch(rect)
-
-    # Dessiner les ROI en gras et couleur spécifique
-    detected_patches = []
-    for name, region in rois.items():
-        if region and name != "h_ref": # Exclure h_ref au cas où il était dans le dictionnaire
-            minr, minc, maxr, maxc = region.bbox
-            color_code = colors.get(name, "yellow")
-            rect = mpatches.Rectangle((minc, minr), maxc - minc, maxr - minr,
-                                      fill=False, edgecolor=color_code, linewidth=3, label=name)
-            ax.add_patch(rect)
-            
-            # Ajouter le label texte
-            ax.text(minc, minr - 5, name, color=color_code, fontsize=8, fontweight='bold')
-
-    # Légende astucieuse pour éviter les doublons
-    handles, labels = ax.get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    ax.legend(by_label.values(), by_label.keys(), loc='upper right')
-
-    print("\n🖼️  Affichage de la fenêtre graphique...")
-    plt.show()
 
 if __name__ == "__main__":
-    main()
+    # Initialisation unique du lecteur
+    print("Chargement du modèle EasyOCR...")
+    reader = easyocr.Reader(['en'], gpu=False) 
+    
+    # CHEMIN : data/inputs
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    data_folder = os.path.join(current_dir, "data", "inputs")
+    
+    if not os.path.exists(data_folder):
+        print(f"❌ Le dossier n'existe pas : {data_folder}")
+        print("Veuillez créer 'data/inputs' et y mettre vos images.")
+        sys.exit()
+
+    # On ne prend que les images
+    extensions_valides = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
+    files = [f for f in os.listdir(data_folder) if f.lower().endswith(extensions_valides)]
+    
+    if not files:
+        print(f"❌ Aucune image trouvée dans {data_folder}")
+    
+    for f in files:
+        path = os.path.join(data_folder, f)
+        analyze_image(path, reader)
