@@ -61,10 +61,33 @@ def method_simple_inversion(img):
     gray = cv2.cvtColor(img_upscaled, cv2.COLOR_BGR2GRAY)
     return cv2.bitwise_not(gray)
 
+def method_clahe_contrast(img):
+    """
+    Méthode 4: CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    Pour normaliser l'éclairage hétérogène (ombre/lumière).
+    """
+    img_upscaled = cv2.resize(img, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+    gray = cv2.cvtColor(img_upscaled, cv2.COLOR_BGR2GRAY)
+    
+    # Application du CLAHE (Égalisation locale d'histogramme)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    
+    # Binarisation après rehaussement de contraste
+    # On utilise Otsu qui s'adapte bien après un CLAHE
+    _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Heuristique d'inversion (on veut du texte noir sur fond blanc)
+    if np.sum(binary == 0) > np.sum(binary == 255):
+        binary = cv2.bitwise_not(binary)
+        
+    return binary
+
 def get_processed_images(img):
     """Retourne une liste de tuples (nom_methode, image_traitée)"""
     return [
         ("Adaptive", method_adaptive_threshold(img)),
         ("LAB", method_lab_channel(img)),
-        ("Inverted", method_simple_inversion(img))
+        ("Inverted", method_simple_inversion(img)),
+        ("CLAHE", method_clahe_contrast(img))
     ]
