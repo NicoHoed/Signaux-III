@@ -1,7 +1,7 @@
 import easyocr
 import numpy as np
 from collections import Counter
-from sklearn.cluster import KMeans # On change GMM pour KMeans (plus robuste ici)
+from sklearn.cluster import KMeans
 import warnings
 
 # Mapping pour corriger les erreurs fréquentes d'OCR
@@ -27,9 +27,9 @@ LAYOUT_RULES = {
         "BOT":  {'Z', 'X', 'C', 'V'}
     },
     "QWERTZ": {
-        "TOP":  {'Q', 'W', 'E', 'R', 'T', 'Z'}, # Z est en haut !
+        "TOP":  {'Q', 'W', 'E', 'R', 'T', 'Z'},
         "MID":  {'A', 'S', 'D', 'F', 'G'},
-        "BOT":  {'Y', 'X', 'C', 'V'}            # Y est en bas !
+        "BOT":  {'Y', 'X', 'C', 'V'}
     }
 }
 
@@ -51,7 +51,7 @@ def run_ocr_pipeline(reader, processed_images):
             continue
         
         for (bbox, text, conf) in results:
-            if conf < 0.3: continue # On est un peu plus tolérant (0.3 vs 0.4)
+            if conf < 0.3: continue # 0.3 = tolerance
             
             char = clean_char(text)
             if not char or not char.isalpha(): continue
@@ -75,7 +75,7 @@ def run_ocr_pipeline(reader, processed_images):
 
 def cluster_rows(validated_chars):
     """
-    K-MEANS 1D : Plus stable que GMM pour séparer 3 niveaux de hauteur.
+    K-MEANS 1D : Pour séparer 3 niveaux de hauteur.
     """
     if len(validated_chars) < 4:
         return None
